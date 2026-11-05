@@ -276,8 +276,8 @@ void connectWifi() {
         int n = WiFi.scanNetworks();
         Serial.printf("[WiFi] Redes encontradas: %d\n", n);
         for (int i = 0; i < n; ++i) {
-            Serial.printf("  [%d] %s (Canal: %d, RSSI: %d)%s\n", i + 1, WiFi.SSID(i).c_str(), WiFi.channel(i),
-                          WiFi.RSSI(i), WiFi.SSID(i) == WIFI_SSID ? "  <- rede configurada" : "");
+            Serial.printf("  [%d] %s (Canal: %d, RSSI: %d)%s\n", i + 1, WiFi.SSID(i).c_str(), (int) WiFi.channel(i),
+                          (int) WiFi.RSSI(i), WiFi.SSID(i) == WIFI_SSID ? "  <- rede configurada" : "");
         }
         WiFi.scanDelete();
     }

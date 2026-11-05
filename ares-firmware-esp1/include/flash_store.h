@@ -5,9 +5,11 @@
 // Armazenamento das mensagens na FLASH INTERNA do ESP32 (LittleFS), sem microSD.
 //
 // Como funciona (o "porquê" de cada escolha):
-//  - Um único arquivo "/store.bin" com STORE_CAPACITY "gavetas" (slots) de tamanho fixo.
-//    O arquivo é criado inteiro no primeiro boot. Tamanho fixo = nunca falta espaço
-//    no meio da operação e não há malloc no loop().
+//  - STORE_CAPACITY "gavetas" (slots) de tamanho fixo, divididas em arquivos pequenos
+//    "/ares/s000.bin", "/ares/s001.bin"... de 16 gavetas cada (cabem num bloco de 4 KB).
+//    Arquivos pequenos porque o LittleFS copia o arquivo inteiro a partir do ponto
+//    alterado: com um arquivo único de 351 KB cada gravação levava 6 a 8 s.
+//    Tudo é criado no primeiro boot: nunca falta espaço no meio e não há malloc no loop().
 //  - Cada gaveta tem um CRC32 (uma "soma de verificação"). Se a energia cair no meio
 //    de uma gravação, o CRC não bate e a gaveta é tratada como vazia no próximo boot.
 //    Isso é seguro: o ACK de custódia só é enviado DEPOIS da gravação terminar, então

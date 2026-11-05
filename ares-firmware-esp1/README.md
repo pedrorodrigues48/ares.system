@@ -31,7 +31,7 @@ ares-firmware-esp1/
 ## Como a flash é usada (sem microSD)
 | Onde | O quê | Por quê |
 |---|---|---|
-| Partição `spiffs` com **LittleFS**, arquivo `/store.bin` | 2.000 "gavetas" de 180 bytes (~352 KB) | Tamanho fixo criado no 1º boot: nunca falta espaço no meio. LittleFS espalha as gravações (vida útil) e aguenta queda de energia. |
+| Partição `spiffs` com **LittleFS**, arquivos `/ares/s000.bin` ... `s124.bin` | 2.000 "gavetas" de 180 bytes, 16 por arquivo (~352 KB) | Criadas no 1º boot: nunca falta espaço no meio. Arquivos pequenos porque o LittleFS copia o arquivo a partir do ponto alterado: com um arquivo único, cada gravação levava 6-8 s; com 16 gavetas por arquivo, só um bloco de 4 KB é regravado. |
 | Cada gaveta | Pacote + CRC32 | Se a energia cair no meio da gravação, o CRC não bate e a gaveta é ignorada. Como o ACK só sai **depois** de gravar, quem mandou ainda tem a cópia. |
 | RAM | Índice de ~20 bytes por gaveta (~40 KB) | Escolher a próxima (P0 primeiro) sem ler a flash toda hora. Reconstruído a cada boot. |
 | Arquivo `/events.log` | `CRIADA`, `CUSTODIA_ACEITA`, `ENTREGUE`, `EXPIRADA`, `DESCARTADA`... | RS-04 da wiki: nada some em silêncio. Vira `events.old` ao passar de 32 KB. |

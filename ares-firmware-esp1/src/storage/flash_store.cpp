@@ -7,7 +7,6 @@
 #include "../../include/event_log.h"
 #include "../../include/node_clock.h"
 
-#define STORE_FILE "/store.bin"
 #define RECORD_MAGIC 0xA7E5            // "Assinatura" de uma gaveta do ARES
 #define RECORD_VERSION 1
 #define RECORD_FREE 0x00               // Gaveta vazia
@@ -101,26 +100,61 @@ static bool isBefore(uint32_t a, uint32_t b) {
     return (int32_t) (a - b) < 0;
 }
 
-static bool seekSlot(int slot) {
-    return storeFile.seek((size_t) slot * sizeof(FlashRecord));
+// ---------------------------------------------------------------------------
+// Arquivos de "segmento"
+//
+// Lição do primeiro teste nas placas: com UM arquivo grande de 351 KB, cada gravação
+// levava 6 a 8 s. O LittleFS nunca regrava no lugar: mudar algo no meio de um arquivo
+// faz ele copiar o arquivo dali até o fim. Por isso as gavetas ficam divididas em
+// arquivos pequenos de 16 gavetas (16 x 180 = 2.880 bytes, menos que um bloco de 4 KB
+// da flash). Mudar uma gaveta agora só regrava um bloco, em poucos milissegundos.
+// ---------------------------------------------------------------------------
+
+#define STORE_DIR "/ares"
+#define OLD_STORE_FILE "/store.bin"     // Formato antigo (arquivo único), apagado se existir
+#define SEGMENT_RECORDS 16
+#define SEGMENT_COUNT ((STORE_CAPACITY + SEGMENT_RECORDS - 1) / SEGMENT_RECORDS)
+#define SEGMENT_BYTES (SEGMENT_RECORDS * sizeof(FlashRecord))
+
+static_assert(SEGMENT_RECORDS * sizeof(FlashRecord) <= 4096, "Um segmento precisa caber num bloco de 4 KB da flash");
+
+static int openSegment = -1;           // Qual segmento está aberto em storeFile (-1 = nenhum)
+
+static void segmentPath(int segment, char *out, size_t size) {
+    snprintf(out, size, STORE_DIR "/s%03d.bin", segment);
+}
+
+// Deixa aberto o segmento da gaveta pedida (troca de arquivo só quando precisa)
+static bool selectSlot(int slot) {
+    int segment = slot / SEGMENT_RECORDS;
+    if (segment != openSegment) {
+        if (storeFile) storeFile.close();
+        openSegment = -1;
+        char path[24];
+        segmentPath(segment, path, sizeof(path));
+        storeFile = LittleFS.open(path, "r+");   // r+ = ler e gravar em qualquer posição
+        if (!storeFile) return false;
+        openSegment = segment;
+    }
+    return storeFile.seek((size_t) (slot % SEGMENT_RECORDS) * sizeof(FlashRecord));
 }
 
 static bool readRecord(int slot, FlashRecord *r) {
-    if (!seekSlot(slot)) return false;
+    if (!selectSlot(slot)) return false;
     return storeFile.read((uint8_t *) r, sizeof(FlashRecord)) == sizeof(FlashRecord);
 }
 
 // Grava e força a ida para a flash (flush). Só depois disso a mensagem está segura.
 static bool writeRecord(int slot, const FlashRecord *r) {
-    if (!seekSlot(slot)) return false;
+    if (!selectSlot(slot)) return false;
     if (storeFile.write((const uint8_t *) r, sizeof(FlashRecord)) != sizeof(FlashRecord)) return false;
     storeFile.flush();
     return true;
 }
 
-// Para apagar basta trocar o primeiro byte (state) para FREE: grava 1 byte, não 180
+// Para apagar basta trocar o primeiro byte (state) para FREE
 static bool markSlotFree(int slot) {
-    if (!seekSlot(slot)) return false;
+    if (!selectSlot(slot)) return false;
     uint8_t freeState = RECORD_FREE;
     if (storeFile.write(&freeState, 1) != 1) return false;
     storeFile.flush();
@@ -131,51 +165,55 @@ static bool markSlotFree(int slot) {
 // Inicialização
 // ---------------------------------------------------------------------------
 
-// Cria (ou aumenta) o arquivo até ter STORE_CAPACITY gavetas, todas vazias
-static bool ensureFileSize() {
-    const size_t wanted = (size_t) STORE_CAPACITY * sizeof(FlashRecord);
-    size_t current = 0;
-    if (LittleFS.exists(STORE_FILE)) {
-        File f = LittleFS.open(STORE_FILE, "r");
-        if (f) {
-            current = f.size();
-            f.close();
-        }
+// Cria os segmentos que faltam (todas as gavetas vazias). Só demora no primeiro boot.
+static bool ensureSegments() {
+    if (LittleFS.exists(OLD_STORE_FILE)) {
+        Serial.println("[STORE] Apagando o arquivo do formato antigo (/store.bin).");
+        LittleFS.remove(OLD_STORE_FILE);
     }
-    if (current >= wanted) return true;
+    if (!LittleFS.exists(STORE_DIR)) LittleFS.mkdir(STORE_DIR);
 
-    Serial.printf("[STORE] Preparando a flash: %u gavetas x %u bytes = %u KB (só no primeiro boot, alguns segundos)",
-                  (unsigned) STORE_CAPACITY, (unsigned) sizeof(FlashRecord), (unsigned) (wanted / 1024));
-    if (LittleFS.totalBytes() - LittleFS.usedBytes() < wanted - current + 8192) {
-        Serial.println("\n[ERRO] Partição de arquivos pequena demais. No Arduino IDE: Ferramentas > Partition Scheme >");
-        Serial.println("       'Default 4MB with spiffs'. Ou diminua STORE_CAPACITY no ares_config.h.");
-        return false;
-    }
-    // "a" = acrescenta no fim, preservando as gavetas que já existem
-    File f = LittleFS.open(STORE_FILE, "a");
-    if (!f) return false;
-    static uint8_t zeros[1024];        // static: não ocupa a pilha do loop()
+    static uint8_t zeros[SEGMENT_BYTES];   // static: não ocupa a pilha do loop()
     memset(zeros, 0, sizeof(zeros));
-    size_t remaining = wanted - current;
-    size_t written = 0;
-    while (remaining > 0) {
-        size_t chunk = remaining > sizeof(zeros) ? sizeof(zeros) : remaining;
-        if (f.write(zeros, chunk) != chunk) {
-            f.close();
-            Serial.println("\n[ERRO] Falha ao preparar o arquivo na flash.");
+    int created = 0;
+    for (int segment = 0; segment < SEGMENT_COUNT; segment++) {
+        char path[24];
+        segmentPath(segment, path, sizeof(path));
+        size_t current = 0;
+        if (LittleFS.exists(path)) {
+            File f = LittleFS.open(path, "r");
+            if (f) {
+                current = f.size();
+                f.close();
+            }
+        }
+        if (current >= SEGMENT_BYTES) continue;
+        if (created == 0) {
+            Serial.printf("[STORE] Preparando a flash: %d arquivos de %u gavetas (só no primeiro boot)",
+                          SEGMENT_COUNT, (unsigned) SEGMENT_RECORDS);
+        }
+        if (LittleFS.totalBytes() - LittleFS.usedBytes() < 2 * 4096) {
+            Serial.println("\n[ERRO] Partição de arquivos pequena demais. No Arduino IDE: Ferramentas > Partition Scheme >");
+            Serial.println("       'Default 4MB with spiffs'. Ou diminua STORE_CAPACITY no ares_config.h.");
             return false;
         }
-        remaining -= chunk;
-        written += chunk;
-        if (written % (32 * 1024) == 0) Serial.print(".");
+        // "a" = acrescenta no fim, preservando as gavetas que já existem
+        File f = LittleFS.open(path, "a");
+        if (!f || f.write(zeros, SEGMENT_BYTES - current) != SEGMENT_BYTES - current) {
+            if (f) f.close();
+            Serial.println("\n[ERRO] Falha ao preparar os arquivos na flash.");
+            return false;
+        }
+        f.close();
+        created++;
+        if (created % 10 == 0) Serial.print(".");
         yield();                       // Deixa o Wi-Fi e o watchdog respirarem
     }
-    f.close();
-    Serial.println(" pronto.");
+    if (created > 0) Serial.println(" pronto.");
     return true;
 }
 
-// Lê o arquivo inteiro e monta o índice na RAM. Gavetas com CRC errado (energia caiu
+// Lê os segmentos e monta o índice na RAM. Gavetas com CRC errado (energia caiu
 // durante a gravação) são liberadas e registradas.
 static void rebuildIndex() {
     memset(indexTable, 0, sizeof(indexTable));
@@ -184,7 +222,7 @@ static void rebuildIndex() {
     int corrupted = 0;
     static FlashRecord r;              // static: 180 bytes fora da pilha
     for (int slot = 0; slot < STORE_CAPACITY; slot++) {
-        if (!readRecord(slot, &r)) break;
+        if (!readRecord(slot, &r)) continue;
         if (r.state != RECORD_PENDING) continue;
         if (r.magic != RECORD_MAGIC || r.version != RECORD_VERSION || r.crc != recordCrc(&r)) {
             corrupted++;
@@ -209,20 +247,18 @@ static void rebuildIndex() {
 }
 
 bool flashStoreBegin() {
-    // begin(true) = formata a partição se ela não montar (ex.: primeira vez na placa)
+    // begin(true) = formata a partição se ela não montar (ex.: primeira vez na placa).
+    // No primeiro boot é normal aparecer "mount failed (-84)" antes da formatação.
     if (!LittleFS.begin(true)) {
         Serial.println("[ERRO] LittleFS não montou. Confira o Partition Scheme (precisa ter SPIFFS/FS).");
         return false;
     }
     Serial.printf("[STORE] LittleFS montado: %u KB usados de %u KB.\n",
                   (unsigned) (LittleFS.usedBytes() / 1024), (unsigned) (LittleFS.totalBytes() / 1024));
-    if (!ensureFileSize()) return false;
-    storeFile = LittleFS.open(STORE_FILE, "r+");   // r+ = ler e gravar em qualquer posição
-    if (!storeFile) {
-        Serial.println("[ERRO] Não consegui abrir o arquivo de mensagens.");
-        return false;
-    }
+    if (!ensureSegments()) return false;
+    unsigned long start = millis();
     rebuildIndex();
+    Serial.printf("[STORE] Índice montado em %lu ms.\n", (unsigned long) (millis() - start));
     storeReady = true;
     return true;
 }
@@ -417,7 +453,8 @@ void flashStorePrint(uint32_t nowSec) {
 
 bool flashStoreFormat() {
     storeReady = false;
-    storeFile.close();
+    if (storeFile) storeFile.close();
+    openSegment = -1;
     LittleFS.format();
     if (!LittleFS.begin(true)) return false;
     return flashStoreBegin();
