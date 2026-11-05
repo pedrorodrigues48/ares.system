@@ -288,6 +288,14 @@ void connectWifi() {
     // A reconexão é feita pela tarefa de HTTP (keepWifiAlive), que devolve o rádio ao
     // canal do ESP-NOW quando não consegue. A automática do ESP32 ficaria varrendo canais.
     WiFi.setAutoReconnect(false);
+    if (strcmp(WIFI_SSID, "DEFAULT_SSID") == 0 || strcmp(WIFI_SSID, "SEU_SSID_AQUI") == 0) {
+        // Sem ares_credentials.h preenchido: nem tenta (economiza ~20 s de boot).
+        // O Gateway funciona só no rádio, guardando tudo na flash.
+        Serial.println("[AVISO] Wi-Fi não configurado (ares_credentials.h). Modo só rádio: as mensagens ficam na flash.");
+        WiFi.disconnect();
+        esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+        return;
+    }
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("[WiFi] Conectando à rede...");
     unsigned long start = millis();

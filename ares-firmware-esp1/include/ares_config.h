@@ -45,7 +45,7 @@
 #define STORE_CAPACITY 2000
 #define MESSAGE_MAX_AGE_SEC (7UL * 24UL * 60UL * 60UL) // Validade: 7 dias guardada (RF-NR-05)
 #define EXPIRE_CHECK_INTERVAL_MS 60000                 // De quanto em quanto tempo procura vencidas
-#define CLOCK_SAVE_INTERVAL_MS 300000                  // Salva o relógio do nó na NVS a cada 5 min
+#define CLOCK_SAVE_INTERVAL_MS 60000                   // Salva o relógio do nó na NVS a cada 1 min
 #define EVENT_LOG_MAX_BYTES 32768                      // Registro de eventos: ao passar disso, vira .old
 
 // --- VIZINHOS E PRÓXIMO SALTO ---

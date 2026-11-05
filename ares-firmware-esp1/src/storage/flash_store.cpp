@@ -215,31 +215,40 @@ static bool ensureSegments() {
 
 // Lê os segmentos e monta o índice na RAM. Gavetas com CRC errado (energia caiu
 // durante a gravação) são liberadas e registradas.
+// Lê um segmento inteiro (16 gavetas) por vez: 125 leituras em vez de 2.000 deixa o
+// boot bem mais rápido (no teste, ler gaveta por gaveta levava ~5 s).
 static void rebuildIndex() {
     memset(indexTable, 0, sizeof(indexTable));
     nextOrder = 1;
     int recovered = 0;
     int corrupted = 0;
-    static FlashRecord r;              // static: 180 bytes fora da pilha
-    for (int slot = 0; slot < STORE_CAPACITY; slot++) {
-        if (!readRecord(slot, &r)) continue;
-        if (r.state != RECORD_PENDING) continue;
-        if (r.magic != RECORD_MAGIC || r.version != RECORD_VERSION || r.crc != recordCrc(&r)) {
-            corrupted++;
-            markSlotFree(slot);
-            eventLog("CORROMPIDA", nullptr, "gaveta com CRC errado liberada no boot");
-            continue;
+    static FlashRecord segment[SEGMENT_RECORDS];   // static: 2,9 KB fora da pilha
+    for (int seg = 0; seg < SEGMENT_COUNT; seg++) {
+        if (!selectSlot(seg * SEGMENT_RECORDS)) continue;
+        size_t got = storeFile.read((uint8_t *) segment, SEGMENT_BYTES);
+        int records = (int) (got / sizeof(FlashRecord));
+        for (int i = 0; i < records; i++) {
+            int slot = seg * SEGMENT_RECORDS + i;
+            if (slot >= STORE_CAPACITY) break;
+            const FlashRecord *r = &segment[i];
+            if (r->state != RECORD_PENDING) continue;
+            if (r->magic != RECORD_MAGIC || r->version != RECORD_VERSION || r->crc != recordCrc(r)) {
+                corrupted++;
+                markSlotFree(slot);
+                eventLog("CORROMPIDA", nullptr, "gaveta com CRC errado liberada no boot");
+                continue;
+            }
+            FlashIndexEntry *e = &indexTable[slot];
+            e->used = true;
+            e->priority = clampPriority((int) r->packet.header.priority);
+            e->order = r->order;
+            e->receivedAtSec = r->receivedAtSec;
+            e->notBeforeMs = 0;
+            e->keyHash = headerHash(&r->packet.header);
+            if (r->order >= nextOrder) nextOrder = r->order + 1;
+            recovered++;
         }
-        FlashIndexEntry *e = &indexTable[slot];
-        e->used = true;
-        e->priority = clampPriority((int) r.packet.header.priority);
-        e->order = r.order;
-        e->receivedAtSec = r.receivedAtSec;
-        e->notBeforeMs = 0;
-        e->keyHash = headerHash(&r.packet.header);
-        if (r.order >= nextOrder) nextOrder = r.order + 1;
-        recovered++;
-        if ((slot & 63) == 0) yield();
+        yield();
     }
     Serial.printf("[STORE] %d mensagem(ns) recuperada(s) da flash", recovered);
     if (corrupted > 0) Serial.printf(", %d gaveta(s) corrompida(s) liberada(s)", corrupted);

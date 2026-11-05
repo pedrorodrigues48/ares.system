@@ -14,9 +14,11 @@ static unsigned long lastSaveAt = 0;
 
 void nodeClockBegin() {
     prefs.begin("ares", false);       // "ares" = nome do espaço de chaves; false = leitura e escrita
-    // +1 s: o relógio salvo pode estar até 5 min atrasado (quanto ficou ligado sem salvar).
-    // Preferimos achar a mensagem um pouco mais nova do que apagá-la antes da hora.
-    clockAtBoot = prefs.getUInt("clock", 0) + 1;
+    // O relógio salvo pode estar atrasado até CLOCK_SAVE_INTERVAL_MS (o tempo que ficou
+    // ligado depois do último salvamento). Somamos esse intervalo inteiro para o relógio
+    // NUNCA voltar para trás depois de um reinício (no teste, o BOOT aparecia no log
+    // "antes" de eventos que aconteceram antes dele). O preço é adiantar no máximo 1 min.
+    clockAtBoot = prefs.getUInt("clock", 0) + CLOCK_SAVE_INTERVAL_MS / 1000;
     bootCount = prefs.getUInt("boots", 0) + 1;
     prefs.putUInt("boots", bootCount);
     prefs.putUInt("clock", clockAtBoot);
