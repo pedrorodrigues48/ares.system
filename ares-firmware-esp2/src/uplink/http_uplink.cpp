@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -100,14 +101,27 @@ static int postJob(const UplinkJob *job) {
     return code;
 }
 
-// Sem Wi-Fi: tenta de novo de tempos em tempos (o Hotspot pode ter reiniciado)
+// Sem Wi-Fi: tenta de novo de tempos em tempos (o Hotspot pode ter reiniciado).
+// Cuidado: enquanto procura a rede, o rádio passa por todos os canais e o ESP-NOW
+// fica surdo. Por isso, se não conectar, o rádio é devolvido ao canal do ESP-NOW.
 static void keepWifiAlive() {
     if (WiFi.status() == WL_CONNECTED) return;
     if (millis() - lastWifiTryAt < WIFI_RETRY_INTERVAL_MS) return;
     lastWifiTryAt = millis();
+    // Credenciais não preenchidas: nem tenta (só atrapalharia o rádio)
+    if (strcmp(WIFI_SSID, "DEFAULT_SSID") == 0 || strcmp(WIFI_SSID, "SEU_SSID_AQUI") == 0) return;
     if (GATEWAY_DEBUG) Serial.println("[WiFi] Desconectado. Tentando reconectar (as mensagens continuam guardadas na flash)...");
     WiFi.disconnect();
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    // Esta é a tarefa do HTTP, então pode esperar aqui sem travar o loop() nem o rádio
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) vTaskDelay(pdMS_TO_TICKS(250));
+    if (WiFi.status() != WL_CONNECTED) {
+        WiFi.disconnect();
+        esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+        if (GATEWAY_DEBUG) Serial.printf("[WiFi] Não conectou. Rádio de volta ao canal %d; nova tentativa em %d s.\n",
+                                         ESPNOW_CHANNEL, WIFI_RETRY_INTERVAL_MS / 1000);
+    }
 }
 
 static void uplinkTask(void *arg) {

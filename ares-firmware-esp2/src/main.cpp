@@ -285,7 +285,9 @@ void connectWifi() {
     // Sem economia de energia no rádio: com ela, o ESP32 "cochila" entre os beacons do
     // roteador e perde pacotes ESP-NOW que chegam nesse intervalo.
     WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
+    // A reconexão é feita pela tarefa de HTTP (keepWifiAlive), que devolve o rádio ao
+    // canal do ESP-NOW quando não consegue. A automática do ESP32 ficaria varrendo canais.
+    WiFi.setAutoReconnect(false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("[WiFi] Conectando à rede...");
     unsigned long start = millis();
@@ -297,6 +299,7 @@ void connectWifi() {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[AVISO] Sem Wi-Fi agora. O Gateway continua recebendo e guardando; tenta de novo a cada 30 s.");
         // Sem Wi-Fi o canal ficaria "solto": trava no canal do ESP-NOW para continuar ouvindo
+        WiFi.disconnect();
         esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
     }
 }
