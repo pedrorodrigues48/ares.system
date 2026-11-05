@@ -97,6 +97,18 @@ Comandos úteis no Monitor Serial de qualquer ESP: `s` (status), `q` (mensagens 
 | Prioridade | Com o Gateway desligado, crie `p4 a`, `p4 b`, `p0 c` | Ao religar, `c` chega primeiro |
 | Rota alternativa | Storage longe do Gateway, Router no meio | `[ROUTE] Entregando para ... (Router)` |
 
+### Resultado do teste em placas reais (05/11/2026)
+Storage + Gateway em ESP32 comuns, Hotspot de iPhone (2,4 GHz, canal 6), Arduino IDE 2:
+
+| Teste | Resultado |
+|---|---|
+| Gravar uma mensagem na flash | ~0,15 s |
+| `p0` no Storage até a custódia no Gateway | 0,58 s |
+| Storage → Gateway → Wi-Fi → servidor | JSON chegou, HTTP 200 |
+| Servidor desligado e religado | Nada se perdeu, nada duplicou, P1 chegou antes das P4 |
+
+Falta testar: Router (ESP3) em placa real, queda de energia com fila e flash quase cheia.
+
 ---
 
 ## 🧰 Usando o Arduino IDE
@@ -109,6 +121,8 @@ Abra `arduino-ide/ares_esp1_storage/ares_esp1_storage.ino` (idem para `ares_esp2
 * Placa: **ESP32 Dev Module**. Partition Scheme: **Default 4MB with spiffs** (o Storage e o Gateway usam essa área para a flash).
 * ESP2: instale a biblioteca **ArduinoJson** (Ferramentas > Gerenciar Bibliotecas).
 * Placa que fica reiniciando com `partition table error` (a C8:C9:A3:CB:BC:8C fez isso): **Flash Mode DIO** e **Flash Frequency 40MHz**.
+* `Failed to connect to ESP32: No serial data received` na gravação: segure **BOOT**, aperte e solte **EN**, solte o BOOT e grave de novo (ou Upload Speed 115200). Se continuar mesmo com outro cabo e outra porta, o defeito é da placa: troque-a.
+* Duas janelas do `ingress_handler.py` abertas ao mesmo tempo dividem a porta 8080 no Windows e o JSON aparece na janela "errada". Feche todas (`taskkill /IM python.exe /F`) e abra uma só.
 * O código compila nos núcleos 2.x (PlatformIO) e 3.x (Arduino IDE atual): os callbacks do ESP-NOW que mudaram têm `#if` para os dois.
 
 ---
