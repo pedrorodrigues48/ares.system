@@ -100,18 +100,17 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs) {
         AresGateway::getInstance().stop();
     }
 
-    // Ativa os serviços do novo papel com potência TX moderada para evitar queda de tensão (Brownout) no USB
+    // Ativa os serviços do novo papel. Potência TX e modo Long Range ficam em AresRadio::begin()
     if (g_ares_role == ARES_ROLE_GATEWAY) {
+        WiFi.mode(WIFI_STA);
+        AresRadio::applyRadioConfig(); // [LONGO ALCANCE] antes de conectar no hotspot
         AresGateway::getInstance().begin();
-        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     } else if (g_ares_role == ARES_ROLE_ROUTER) {
         AresCaptivePortal::getInstance().begin(g_ares_ssid);
-        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     } else {
         WiFi.mode(WIFI_STA);
-        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
         esp_wifi_set_channel(ARES_ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE); // [CORRECAO CANAL] Relay/Storage no mesmo canal do Gateway
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     }

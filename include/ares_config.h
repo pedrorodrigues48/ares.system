@@ -72,6 +72,16 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs);
 // CONFIGURAÇÕES DE RÁDIO ESP-NOW E WI-FI
 // ==============================================================================
 #define ARES_ESP_NOW_CHANNEL 11 // [CORRECAO CANAL] era 1: precisa ser o mesmo canal do hotspot ARES_BASE_WIFI (11 no teste)
+// [LONGO ALCANCE] Potência máxima + modo Long Range (LR) do ESP-NOW.
+// TODAS as placas precisam ter o mesmo valor de ARES_RADIO_LONG_RANGE, senão uma não ouve a outra.
+// Para voltar ao comportamento antigo: ARES_RADIO_LONG_RANGE 0.
+#define ARES_RADIO_LONG_RANGE 1
+// Potência de transmissão (máximo do ESP32 = 19,5 dBm). Se alguma placa reiniciar sozinha
+// ao ligar o rádio, o problema é alimentação (cabo/porta USB). Plano B: WIFI_POWER_8_5dBm.
+#define ARES_RADIO_TX_POWER WIFI_POWER_19_5dBm
+// Velocidade dos pacotes ESP-NOW no modo LR: WIFI_PHY_RATE_LORA_250K (alcance máximo)
+// ou WIFI_PHY_RATE_LORA_500K (um pouco menos de alcance, metade do tempo no ar).
+#define ARES_RADIO_LR_RATE WIFI_PHY_RATE_LORA_250K
 #define FORCE_SOFTWARE_DEBUG true
 #define BROADCAST_MAC {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 
