@@ -110,7 +110,7 @@ const char ARES_GATEWAY_SETUP_HTML[] PROGMEM = R"rawliteral(
       <input type="password" id="pass" name="pass" placeholder="Senha da rede (deixe vazio se aberta)">
 
       <label for="backend">URL do Backend ARES (Ingress)</label>
-      <input type="text" id="backend" name="backend" required placeholder="http://192.168.1.100:5026/api/ares/ingress">
+      <input type="text" id="backend" name="backend" required placeholder="https://api-ares.dorneles.dev/api/ares/ingress">
 
       <label for="m2m">Chave de API M2M (X-Api-Key)</label>
       <input type="text" id="m2m" name="m2m" placeholder="ares-secret-m2m-key-ufsm-2026">

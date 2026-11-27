@@ -97,7 +97,9 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs);
 // ==============================================================================
 #define GATEWAY_WIFI_SSID         "ARES_BASE_WIFI"
 #define GATEWAY_WIFI_PASS         "aresresiliencia2026"
-#define BACKEND_INGRESS_URL       "http://192.168.137.1:5026/api/ares/ingress"
+// Backend oficial na internet (HTTPS). Para testar com backend local, use o
+// comando serial: backend http://192.168.137.1:5026/api/ares/ingress
+#define BACKEND_INGRESS_URL       "https://api-ares.dorneles.dev/api/ares/ingress"
 #define M2M_API_KEY               "ares-m2m-secret-dev-change-in-production"
 #define GATEWAY_HEARTBEAT_MS      10000 // Heartbeat HTTP a cada 10s para manter o nó ONLINE
 

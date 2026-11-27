@@ -6,6 +6,19 @@
 #include "esp_wifi_types.h"
 #include <sys/time.h>
 #include <time.h>
+#include <WiFiClientSecure.h>
+
+// Abre a conexão HTTP ou HTTPS conforme a URL. Para HTTPS não validamos o
+// certificado (setInsecure): o ESP32 não tem relógio confiável nem lista de
+// CAs atualizada, e a autenticidade dos dados já vem do HMAC + X-Api-Key.
+static bool aresHttpBegin(HTTPClient &http, WiFiClient &plain, WiFiClientSecure &secure, const String &url) {
+    if (url.startsWith("https://")) {
+        secure.setInsecure();
+        secure.setHandshakeTimeout(10);
+        return http.begin(secure, url);
+    }
+    return http.begin(plain, url);
+}
 
 AresGateway* AresGateway::instance = nullptr;
 
@@ -86,8 +99,10 @@ void AresGateway::loadConfig() {
     currentPass = prefs.getString("pass", GATEWAY_WIFI_PASS);
     backendUrl  = prefs.getString("backend", BACKEND_INGRESS_URL);
     m2mKey      = prefs.getString("m2m", M2M_API_KEY);
-    // Migra automaticamente o IP antigo inválido (192.168.1.100) para o IP do Hotspot (192.168.137.1)
-    if (backendUrl.indexOf("192.168.1.100") != -1) {
+    // Migra automaticamente os endereços antigos de teste (192.168.1.100 e o
+    // hotspot 192.168.137.1) para o backend oficial api-ares.dorneles.dev.
+    // Assim placas já gravadas antes não ficam presas no endereço velho.
+    if (backendUrl.indexOf("192.168.1.100") != -1 || backendUrl.indexOf("192.168.137.1") != -1) {
         backendUrl = BACKEND_INGRESS_URL;
         prefs.putString("backend", backendUrl);
     }
@@ -722,10 +737,12 @@ bool AresGateway::sendHeartbeat() {
     }
 
     HTTPClient http;
-    http.begin(hbUrl.c_str());
+    WiFiClient plainClient;
+    WiFiClientSecure secureClient;
+    aresHttpBegin(http, plainClient, secureClient, hbUrl);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-Api-Key", m2mKey.c_str());
-    http.setTimeout(3500);
+    http.setTimeout(8000);  // HTTPS precisa de mais tempo (handshake TLS)
 
     char hbSig[17] = {0};
     computeNodeHmacHex(ARES_NODE_ID, "HB", hbSig);
@@ -851,10 +868,12 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
     if (WiFi.status() != WL_CONNECTED) return false;
 
     HTTPClient http;
-    http.begin(backendUrl.c_str());
+    WiFiClient plainClient;
+    WiFiClientSecure secureClient;
+    aresHttpBegin(http, plainClient, secureClient, backendUrl);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-Api-Key", m2mKey.c_str());
-    http.setTimeout(4000);
+    http.setTimeout(8000);  // HTTPS precisa de mais tempo (handshake TLS)
 
     char pktSig[17] = {0};
     computeNodeHmacHex(packet->header.source_id, packet->header.msg_id, pktSig);
