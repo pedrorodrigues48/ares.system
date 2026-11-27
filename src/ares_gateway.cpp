@@ -799,6 +799,7 @@ bool AresGateway::sendHeartbeat() {
     String body;
     serializeJson(doc, body);
 
+    Serial.printf("[ARES GATEWAY] 💓 Enviando Heartbeat para: %s\n", hbUrl.c_str());
     int httpCode = http.POST(body);
     if (httpCode >= 200 && httpCode < 300) {
         String res = http.getString();
@@ -906,10 +907,11 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
     String body;
     serializeJson(doc, body);
 
+    Serial.printf("[ARES GATEWAY] 📤 Enviando pacote %s para: %s\n", packet->header.msg_id, backendUrl.c_str());
     int httpCode = http.POST(body);
     if (httpCode >= 200 && httpCode < 300) {
         String res = http.getString();
-        Serial.printf("[ARES GATEWAY] HTTP POST Sucesso (%d): %s\n", httpCode, res.c_str());
+        Serial.printf("[ARES GATEWAY] HTTP POST Sucesso (%d) em %s: %s\n", httpCode, backendUrl.c_str(), res.c_str());
 
         JsonDocument resDoc;
         if (deserializeJson(resDoc, res) == DeserializationError::Ok) {
@@ -918,7 +920,7 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
         http.end();
         return true;
     } else {
-        Serial.printf("[ARES GATEWAY] Erro no HTTP POST: %d\n", httpCode);
+        Serial.printf("[ARES GATEWAY] Erro no HTTP POST (%d) para %s\n", httpCode, backendUrl.c_str());
         http.end();
         return false;
     }
