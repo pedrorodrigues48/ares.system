@@ -297,6 +297,14 @@ void AresGateway::onWifiConnected() {
     Serial.printf("                Canal de Rádio:  %d\n", (int)WiFi.channel());
     Serial.printf("                Intensidade RSSI:%d dBm\n", (int)WiFi.RSSI());
     Serial.println("=======================================================\n");
+    if ((int)WiFi.channel() != ARES_ESP_NOW_CHANNEL) {
+        Serial.println("#######################################################");
+        Serial.printf(" ⚠️  CANAL DIFERENTE! Hotspot no canal %d, malha no canal %d.\n", (int)WiFi.channel(), ARES_ESP_NOW_CHANNEL);
+        Serial.println("    O Gateway só ouve as outras placas pelo vazamento do sinal");
+        Serial.println("    (fica fraco e perde mensagens). Mude ARES_ESP_NOW_CHANNEL em");
+        Serial.printf("    include/ares_config.h para %d e grave TODAS as placas.\n", (int)WiFi.channel());
+        Serial.println("#######################################################\n");
+    }
 
     // Desativa SoftAP para economizar RF e evitar colisões
     if (apActive) {
@@ -928,7 +936,16 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
     doc["lon"] = packet->location.lon;
     doc["altura"] = packet->location.altura;
     doc["text_message"] = packet->payload.text_message;
-    doc["timestamp"] = (double)packet->header.timestamp;
+    // O portal do Router grava millis() (segundos desde que a placa ligou) quando ainda
+    // não tem hora certa. Isso chegava no servidor como data de 1970 e a mensagem não
+    // aparecia na lista do site. Se não for uma data UNIX válida, usa a hora atual do
+    // Gateway (sincronizada pelo server_timestamp do heartbeat).
+    uint32_t pktTs = packet->header.timestamp;
+    time_t gwNow = time(nullptr);
+    if (pktTs < 1700000000UL && gwNow > 1700000000L) {
+        pktTs = (uint32_t)gwNow;
+    }
+    doc["timestamp"] = (double)pktTs;
     doc["gateway_id"] = ARES_NODE_ID;
     doc["signature"] = pktSig;
 

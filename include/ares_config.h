@@ -71,12 +71,15 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs);
 // ==============================================================================
 // CONFIGURAÇÕES DE RÁDIO ESP-NOW E WI-FI
 // ==============================================================================
-#define ARES_ESP_NOW_CHANNEL 11 // [CORRECAO CANAL] era 1: precisa ser o mesmo canal do hotspot ARES_BASE_WIFI (11 no teste)
+// Canal da malha: PRECISA ser o mesmo canal do hotspot ARES_BASE_WIFI, porque o Gateway
+// fica no canal do Wi-Fi. O Gateway avisa no serial se os canais forem diferentes.
+// (20/11 o hotspot estava no 11; 27/11 estava no 6.)
+#define ARES_ESP_NOW_CHANNEL 6
 // [LONGO ALCANCE] Potência máxima + modo Long Range (LR) do ESP-NOW.
 // TODAS as placas precisam ter o mesmo valor de ARES_RADIO_LONG_RANGE, senão uma não ouve a outra.
 // Para voltar ao comportamento antigo: ARES_RADIO_LONG_RANGE 0.
 #define ARES_RADIO_LONG_RANGE 1
-// Potência de transmissão (máximo do ESP32 = 19,5 dBm). Se alguma placa reiniciar sozinha
+// Potência de transmissão: usamos o máximo do chip (20 dBm, via esp_wifi_set_max_tx_power(80)). Se alguma placa reiniciar sozinha
 // ao ligar o rádio, o problema é alimentação (cabo/porta USB). Plano B: WIFI_POWER_8_5dBm.
 #define ARES_RADIO_TX_POWER WIFI_POWER_19_5dBm
 // Velocidade dos pacotes ESP-NOW no modo LR: WIFI_PHY_RATE_LORA_250K (alcance máximo)
@@ -104,7 +107,7 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs);
 #define GATEWAY_HEARTBEAT_MS      20000 // Heartbeat HTTP a cada 20s (10s fazia o servidor responder 429)
 #define GATEWAY_RATE_LIMIT_PAUSE_MS 60000 // Pausa em todos os envios HTTP quando o servidor responde 429 (sem Retry-After)
 #define GATEWAY_INGRESS_RETRY_MS  5000  // Espera entre tentativas de reenviar um SOS que falhou
-#define CUSTODY_RESEND_MS         15000 // Router reenvia pela malha os SOS ainda sem confirmação a cada 15s
+#define CUSTODY_RESEND_MS         4000  // Router reenvia pela malha os SOS ainda sem confirmação a cada 4s
 
 // ==============================================================================
 // PINAGEM DE LEDS E PULSO FÍSICO PARA GATEWAY INICIAL
