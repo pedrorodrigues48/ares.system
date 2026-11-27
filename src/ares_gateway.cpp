@@ -1007,7 +1007,10 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
     // Hops trail real (sem criar nós fantasmas HOP_x)
     JsonArray hopsArr = doc["hops_trail"].to<JsonArray>();
     hopsArr.add(packet->header.source_id);
-    if (strcmp(packet->header.source_id, ARES_NODE_ID) != 0) {
+    // Só liga a origem direto ao Gateway se o SOS chegou sem repasse (hop_count 1).
+    // Se veio por outro Router/Relay, não inventa um enlace origem↔Gateway: a rede
+    // real já vai pelo heartbeat (lista de vizinhos de cada nó).
+    if (strcmp(packet->header.source_id, ARES_NODE_ID) != 0 && packet->header.hop_count <= 1) {
         hopsArr.add(ARES_NODE_ID);
     }
 
