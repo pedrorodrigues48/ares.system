@@ -2,6 +2,7 @@
 #include "ares_radio.h"
 #include "ares_storage.h"
 #include <ArduinoJson.h>
+#include <time.h>
 
 AresCaptivePortal* AresCaptivePortal::instance = nullptr;
 
@@ -121,7 +122,10 @@ void AresCaptivePortal::handleSend() {
     packet.header.direction = ARES_DIR_UPSTREAM;
     packet.header.ttl = 64;
     packet.header.hop_count = 1;
-    packet.header.timestamp = millis();
+    // Usa a hora UNIX real quando o Router já sincronizou pela malha; senão millis()
+    // (o Gateway corrige antes de mandar ao servidor).
+    time_t nowEpoch = time(nullptr);
+    packet.header.timestamp = (nowEpoch > 1700000000L) ? (uint32_t)nowEpoch : millis();
 
     packet.telemetry.battery_level = g_ares_battery;
     packet.telemetry.storage_avail_kb = AresStorage::getInstance().getAvailableSpaceKb();

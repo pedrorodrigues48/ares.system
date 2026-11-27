@@ -928,7 +928,16 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
     doc["lon"] = packet->location.lon;
     doc["altura"] = packet->location.altura;
     doc["text_message"] = packet->payload.text_message;
-    doc["timestamp"] = (double)packet->header.timestamp;
+    // O portal do Router grava millis() (segundos desde que a placa ligou) quando ainda
+    // não tem hora certa. Isso chegava no servidor como data de 1970 e a mensagem não
+    // aparecia na lista do site. Se não for uma data UNIX válida, usa a hora atual do
+    // Gateway (sincronizada pelo server_timestamp do heartbeat).
+    uint32_t pktTs = packet->header.timestamp;
+    time_t gwNow = time(nullptr);
+    if (pktTs < 1700000000UL && gwNow > 1700000000L) {
+        pktTs = (uint32_t)gwNow;
+    }
+    doc["timestamp"] = (double)pktTs;
     doc["gateway_id"] = ARES_NODE_ID;
     doc["signature"] = pktSig;
 
