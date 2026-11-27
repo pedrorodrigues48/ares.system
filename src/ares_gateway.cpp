@@ -297,6 +297,14 @@ void AresGateway::onWifiConnected() {
     Serial.printf("                Canal de Rádio:  %d\n", (int)WiFi.channel());
     Serial.printf("                Intensidade RSSI:%d dBm\n", (int)WiFi.RSSI());
     Serial.println("=======================================================\n");
+    if ((int)WiFi.channel() != ARES_ESP_NOW_CHANNEL) {
+        Serial.println("#######################################################");
+        Serial.printf(" ⚠️  CANAL DIFERENTE! Hotspot no canal %d, malha no canal %d.\n", (int)WiFi.channel(), ARES_ESP_NOW_CHANNEL);
+        Serial.println("    O Gateway só ouve as outras placas pelo vazamento do sinal");
+        Serial.println("    (fica fraco e perde mensagens). Mude ARES_ESP_NOW_CHANNEL em");
+        Serial.printf("    include/ares_config.h para %d e grave TODAS as placas.\n", (int)WiFi.channel());
+        Serial.println("#######################################################\n");
+    }
 
     // Desativa SoftAP para economizar RF e evitar colisões
     if (apActive) {

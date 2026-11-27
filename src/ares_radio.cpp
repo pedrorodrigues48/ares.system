@@ -39,6 +39,8 @@ void AresRadio::applyRadioConfig() {
 
     // [LONGO ALCANCE] Potência máxima (antes 8,5 dBm por suspeita de brownout, que era a alimentação USB)
     WiFi.setTxPower(ARES_RADIO_TX_POWER);
+    // Sem limite: pede o máximo que o chip aceita (80 = 20 dBm, em passos de 0,25 dBm)
+    esp_wifi_set_max_tx_power(80);
 }
 
 bool AresRadio::begin(uint8_t channel) {
