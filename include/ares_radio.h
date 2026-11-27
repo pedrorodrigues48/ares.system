@@ -15,6 +15,7 @@ public:
     static AresRadio& getInstance();
 
     bool begin(uint8_t channel = ARES_ESP_NOW_CHANNEL);
+    static void applyRadioConfig();
     bool sendBroadcast(const AresMessagePacket *packet);
     bool sendToMac(const uint8_t *targetMac, const AresMessagePacket *packet);
 

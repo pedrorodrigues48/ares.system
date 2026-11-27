@@ -1,4 +1,5 @@
 #include "ares_radio.h"
+#include <esp_wifi.h>
 
 AresRadio* AresRadio::instance = nullptr;
 
@@ -13,10 +14,39 @@ AresRadio& AresRadio::getInstance() {
     return *instance;
 }
 
+// [LONGO ALCANCE] Liga b/g/n + LR na interface STA e põe a potência no máximo.
+// Pode ser chamada antes do WiFi.begin() do Gateway (ideal: mudar o protocolo com o
+// Wi-Fi já conectado pode derrubar a conexão por um instante).
+void AresRadio::applyRadioConfig() {
+    if (WiFi.getMode() == WIFI_MODE_NULL) {
+        WiFi.mode(WIFI_STA);
+    }
+
+    // [LONGO ALCANCE] Interface STA (a que o ESP-NOW usa) em 802.11 b/g/n + LR.
+    // O b/g/n continua ligado para o Gateway conectar no hotspot ARES_BASE_WIFI.
+    // O SoftAP do Router (celulares) não é tocado: continua só b/g/n.
+#if ARES_RADIO_LONG_RANGE
+    const uint8_t wanted = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR;
+    uint8_t current = 0;
+    esp_wifi_get_protocol(WIFI_IF_STA, &current);
+    if (current != wanted) { // só mexe se precisar (não derruba o Wi-Fi do Gateway à toa)
+        esp_err_t protoErr = esp_wifi_set_protocol(WIFI_IF_STA, wanted);
+        if (protoErr != ESP_OK) {
+            Serial.printf("[ARES RADIO] Falha ao ativar Long Range (erro %d)\n", protoErr);
+        }
+    }
+#endif
+
+    // [LONGO ALCANCE] Potência máxima (antes 8,5 dBm por suspeita de brownout, que era a alimentação USB)
+    WiFi.setTxPower(ARES_RADIO_TX_POWER);
+}
+
 bool AresRadio::begin(uint8_t channel) {
     if (WiFi.getMode() == WIFI_MODE_NULL) {
         WiFi.mode(WIFI_STA);
     }
+
+    applyRadioConfig();
 
     // Inicializa ESP-NOW
     if (esp_now_init() != ESP_OK) {
@@ -41,7 +71,19 @@ bool AresRadio::begin(uint8_t channel) {
         }
     }
 
+#if ARES_RADIO_LONG_RANGE
+    // Sem isto o ESP-NOW continua enviando a 1 Mbps normal; com isto os pacotes saem no modo LR.
+    esp_err_t rateErr = esp_wifi_config_espnow_rate(WIFI_IF_STA, ARES_RADIO_LR_RATE);
+    if (rateErr != ESP_OK) {
+        Serial.printf("[ARES RADIO] Falha ao definir taxa LR do ESP-NOW (erro %d)\n", rateErr);
+    }
+#endif
+
+    int8_t txQuarterDbm = 0;
+    esp_wifi_get_max_tx_power(&txQuarterDbm);
     Serial.printf("[ARES RADIO] ESP-NOW ativo no canal %d. MAC Local: %s\n", channel, WiFi.macAddress().c_str());
+    Serial.printf("[ARES RADIO] Potencia TX: %.1f dBm | Long Range: %s\n",
+                  txQuarterDbm / 4.0f, ARES_RADIO_LONG_RANGE ? "LIGADO" : "desligado");
     return true;
 }
 
