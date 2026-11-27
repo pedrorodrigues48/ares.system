@@ -121,7 +121,9 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs) {
 // Envia confirmação de custódia DTN (ACK) para o emissor liberar a memória flash
 void sendCustodyAck(const char* targetMsgId, const char* targetNodeId) {
     AresMessagePacket ack = {};
-    snprintf(ack.header.msg_id, sizeof(ack.header.msg_id), "ACK-%s", targetMsgId);
+    // ID único por ACK (o Gateway pode reenviar o ACK); senão os nós do meio achavam que
+    // era repetido e não repassavam. O ID do SOS confirmado vai no payload.
+    snprintf(ack.header.msg_id, sizeof(ack.header.msg_id), "K%04lu-%s", (unsigned long)(millis() % 10000), targetMsgId);
     strncpy(ack.header.source_id, ARES_NODE_ID, sizeof(ack.header.source_id) - 1);
     strncpy(ack.header.destination_id, targetNodeId, sizeof(ack.header.destination_id) - 1);
     ack.header.priority = ARES_P0_EMERGENCY;
@@ -168,6 +170,16 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
             (packet->header.msg_type == ARES_MSG_DATA || packet->header.msg_type == 0)) {
             sendCustodyAck(packet->header.msg_id, packet->header.source_id);
         }
+        // Router/Relay: o nó de origem reenviou o SOS (hop_count == 1, veio direto dele),
+        // então o repasse anterior pode ter se perdido. Repassa de novo. Só cópias diretas
+        // da origem, para dois nós não ficarem repassando um para o outro sem parar.
+        else if ((g_ares_role == ARES_ROLE_ROUTER || g_ares_role == ARES_ROLE_RELAY) &&
+                 packet->header.direction == ARES_DIR_UPSTREAM && packet->header.hop_count == 1 &&
+                 (packet->header.msg_type == ARES_MSG_DATA || packet->header.msg_type == 0)) {
+            Serial.printf("[%s] 🔁 [RELAY DADOS] %s reenviou o SOS %s, repassando de novo\n",
+                          ARES_NODE_ID, packet->header.source_id, packet->header.msg_id);
+            forwardPacketOnMesh(packet);
+        }
         return;
     }
     AresRadio::getInstance().markMessageSeen(packet->header.msg_id);
@@ -185,6 +197,15 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
 
     // 1. Confirmação de Custódia DTN
     if (packet->header.msg_type == ARES_MSG_CUSTODY_ACK) {
+        // ACK para outro nó: Router/Relay repassa para ele chegar em quem está mais longe
+        if (strcmp(packet->header.destination_id, ARES_NODE_ID) != 0) {
+            if (g_ares_role == ARES_ROLE_ROUTER || g_ares_role == ARES_ROLE_RELAY) {
+                Serial.printf("[%s] 🔄 [RELAY ACK] Repassando confirmação do SOS %s para %s\n",
+                              ARES_NODE_ID, packet->payload.text_message, packet->header.destination_id);
+                forwardPacketOnMesh(packet);
+            }
+            return;
+        }
         Serial.printf("[%s] 📥 [DTN CUSTODY ACK] Confirmação recebida de %s para pacote %s (RSSI: %d dBm)\n",
                       ARES_NODE_ID, packet->header.source_id, packet->payload.text_message, rssi);
         AresStorage::getInstance().confirmCustody(packet->payload.text_message);
@@ -330,6 +351,14 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
     }
 
     if (g_ares_role == ARES_ROLE_ROUTER) {
+        // SOS de outro Router/nó subindo para a base: este Router também repassa
+        // (antes só o RELAY repassava, então Router → Router → Gateway não funcionava)
+        if (packet->header.direction == ARES_DIR_UPSTREAM) {
+            Serial.printf("[%s] 🔄 [RELAY DADOS] Router repassando SOS %s de %s rumo ao Gateway (salto %d ➔ %d)\n",
+                          ARES_NODE_ID, packet->header.msg_id, packet->header.source_id,
+                          packet->header.hop_count, packet->header.hop_count + 1);
+            forwardPacketOnMesh(packet);
+        }
         if (packet->header.direction == ARES_DIR_DOWNSTREAM) {
             if (strcmp(packet->header.destination_id, ARES_NODE_ID) == 0 || strcmp(packet->header.destination_id, "BROADCAST") == 0) {
                 Serial.printf("[%s] NOTIFICAÇÃO DA BASE RECEBIDA: %s\n", ARES_NODE_ID, packet->payload.text_message);
