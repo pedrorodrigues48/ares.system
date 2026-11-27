@@ -23,6 +23,10 @@ struct AresRemoteMeshNodeCache {
     int rssi;
     uint8_t hops;
     bool dirty;
+    // Vizinhos diretos informados pelo próprio nó no beacon (campo NB)
+    char nb_ids[6][20];
+    int nb_rssi[6];
+    uint8_t nb_count;
 };
 
 struct AresCommandAckCache {

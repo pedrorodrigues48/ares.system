@@ -33,6 +33,54 @@ unsigned long lastAliveBlinkTime = 0;
 unsigned long packetLedTurnOffTime = 0;
 unsigned long gatewayPulsePressStart = 0;
 unsigned long lastCustodyResendTime = 0;
+AresNeighbor g_ares_neighbors[ARES_MAX_NEIGHBORS] = {};
+
+// Registra/atualiza um vizinho direto
+static void recordNeighbor(const char *id, int rssi) {
+    if (!id || !id[0] || strcmp(id, ARES_NODE_ID) == 0) return;
+    unsigned long now = millis();
+    int slot = -1, oldest = 0;
+    for (int i = 0; i < ARES_MAX_NEIGHBORS; i++) {
+        if (strcmp(g_ares_neighbors[i].id, id) == 0) { slot = i; break; }
+        if (slot == -1 && g_ares_neighbors[i].id[0] == '\0') slot = i;
+        if (g_ares_neighbors[i].lastSeen < g_ares_neighbors[oldest].lastSeen) oldest = i;
+    }
+    if (slot == -1) slot = oldest;
+    if (strcmp(g_ares_neighbors[slot].id, id) != 0) {
+        Serial.printf("[%s] 👋 [VIZINHO] Novo vizinho direto: %s (RSSI %d dBm)\n", ARES_NODE_ID, id, rssi);
+    }
+    strncpy(g_ares_neighbors[slot].id, id, sizeof(g_ares_neighbors[slot].id) - 1);
+    g_ares_neighbors[slot].rssi = rssi;
+    g_ares_neighbors[slot].lastSeen = now;
+}
+
+// Monta "NB:599644-88,A00370-70" (só os 6 últimos caracteres do ID, RSSI sem sinal)
+// cabendo em maxLen. Remove da lista quem não é ouvido há mais de 20 s.
+static void buildNeighborField(char *out, size_t maxLen) {
+    out[0] = '\0';
+    if (maxLen < 8) return;
+    unsigned long now = millis();
+    size_t used = snprintf(out, maxLen, "NB:");
+    bool first = true;
+    for (int i = 0; i < ARES_MAX_NEIGHBORS; i++) {
+        AresNeighbor &n = g_ares_neighbors[i];
+        if (!n.id[0]) continue;
+        if (now - n.lastSeen > ARES_NEIGHBOR_TIMEOUT_MS) {
+            Serial.printf("[%s] 💨 [VIZINHO] %s saiu do alcance\n", ARES_NODE_ID, n.id);
+            n.id[0] = '\0';
+            continue;
+        }
+        size_t idLen = strlen(n.id);
+        const char *shortId = idLen > 6 ? n.id + idLen - 6 : n.id;
+        char item[16];
+        int len = snprintf(item, sizeof(item), "%s%s-%d", first ? "" : ",", shortId, abs(n.rssi));
+        if (used + len >= maxLen) break;
+        strcat(out, item);
+        used += len;
+        first = false;
+    }
+    if (first) out[0] = '\0'; // nenhum vizinho
+}
 int custodyResendIndex = 0;
 bool gatewayPulseTriggered = false;
 bool batteryDegradedMode = false;
@@ -160,6 +208,11 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
     // Ignora pacotes originados por este próprio nó que ecoaram de outros Relays
     if (strcmp(packet->header.source_id, ARES_NODE_ID) == 0) {
         return;
+    }
+
+    // Pacote que veio direto da origem (sem repasse): a origem é vizinha deste nó
+    if (packet->header.hop_count <= 1) {
+        recordNeighbor(packet->header.source_id, rssi);
     }
 
     // Deduplicação contra loops de inundação RF (antes de acionar o LED)
@@ -540,14 +593,26 @@ void loop() {
         strncpy(telePkt.location.lon, ARES_NODE_LON, sizeof(telePkt.location.lon) - 1);
         strncpy(telePkt.location.altura, ARES_NODE_ALTURA, sizeof(telePkt.location.altura) - 1);
 
-        snprintf(telePkt.payload.text_message, sizeof(telePkt.payload.text_message),
+        int baseLen = snprintf(telePkt.payload.text_message, sizeof(telePkt.payload.text_message),
                  "ROLE:%s|SIG:%s|MAC:%s",
                  aresRoleToString(g_ares_role), teleSig, g_ares_mac_str);
+        // Lista de vizinhos diretos no espaço que sobrar (o site usa para desenhar a rede)
+        if (baseLen > 0 && (size_t)baseLen + 6 < sizeof(telePkt.payload.text_message)) {
+            char nbField[64];
+            size_t room = sizeof(telePkt.payload.text_message) - baseLen - 1; // -1 do '|'
+            buildNeighborField(nbField, room < sizeof(nbField) ? room : sizeof(nbField));
+            if (nbField[0]) {
+                strcat(telePkt.payload.text_message, "|");
+                strcat(telePkt.payload.text_message, nbField);
+            }
+        }
 
         AresRadio::getInstance().markMessageSeen(telePkt.header.msg_id);
         AresRadio::getInstance().sendBroadcast(&telePkt);
         triggerPacketActivityLed();
-        Serial.printf("[%s] 📡 [TX BEACON RF] Emitindo presença na malha | Função: %s | Flash Livre: %u KB | HMAC: %s\n",
-                      ARES_NODE_ID, aresRoleToString(g_ares_role), telePkt.telemetry.storage_avail_kb, teleSig);
+        const char *nbInfo = strstr(telePkt.payload.text_message, "NB:");
+        Serial.printf("[%s] 📡 [TX BEACON RF] Emitindo presença na malha | Função: %s | Flash Livre: %u KB | Vizinhos: %s\n",
+                      ARES_NODE_ID, aresRoleToString(g_ares_role), telePkt.telemetry.storage_avail_kb,
+                      nbInfo ? nbInfo + 3 : "nenhum");
     }
 }

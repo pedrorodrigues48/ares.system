@@ -19,6 +19,17 @@ extern char g_ares_altura[16];
 extern uint8_t g_ares_role;
 extern float g_ares_battery;
 
+// Vizinhos diretos: nós que este nó ouviu sem intermediário (hop_count 1).
+// Vão no beacon de telemetria (campo NB) para o site desenhar a rede real.
+struct AresNeighbor {
+    char id[20];
+    int rssi;
+    unsigned long lastSeen;
+};
+#define ARES_MAX_NEIGHBORS        8
+#define ARES_NEIGHBOR_TIMEOUT_MS  20000 // some da lista se ficar 20 s sem ser ouvido
+extern AresNeighbor g_ares_neighbors[ARES_MAX_NEIGHBORS];
+
 // Identificador único real derivado do MAC de fábrica no eFuse (ex: ESP32_A00370)
 #define ARES_NODE_ID (g_ares_node_id[0] != '\0' ? g_ares_node_id : "ESP32_DYNAMIC")
 
