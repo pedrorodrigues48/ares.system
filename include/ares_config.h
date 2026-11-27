@@ -101,7 +101,10 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs);
 // comando serial: backend http://192.168.137.1:5026/api/ares/ingress
 #define BACKEND_INGRESS_URL       "https://api-ares.dorneles.dev/api/ares/ingress"
 #define M2M_API_KEY               "ares-m2m-secret-dev-change-in-production"
-#define GATEWAY_HEARTBEAT_MS      10000 // Heartbeat HTTP a cada 10s para manter o nó ONLINE
+#define GATEWAY_HEARTBEAT_MS      20000 // Heartbeat HTTP a cada 20s (10s fazia o servidor responder 429)
+#define GATEWAY_RATE_LIMIT_PAUSE_MS 60000 // Pausa em todos os envios HTTP quando o servidor responde 429 (sem Retry-After)
+#define GATEWAY_INGRESS_RETRY_MS  5000  // Espera entre tentativas de reenviar um SOS que falhou
+#define CUSTODY_RESEND_MS         15000 // Router reenvia pela malha os SOS ainda sem confirmação a cada 15s
 
 // ==============================================================================
 // PINAGEM DE LEDS E PULSO FÍSICO PARA GATEWAY INICIAL
