@@ -77,6 +77,7 @@ AresGateway::AresGateway()
       lastWifiRetryTime(0),
       lastPostRetryTime(0),
       lastHeartbeatTime(0),
+      rateLimitUntil(0),
       apActive(false),
       isWifiConnected(false),
       begun(false),
@@ -693,7 +694,12 @@ void AresGateway::processDownstreamAndControlResponse(JsonDocument& resDoc) {
                          "CMD:%s|ROLE:%d|SIG:%s|TS:%lu",
                          cmdId, roleCode, sig, (unsigned long)ts);
 
-                AresRadio::getInstance().sendBroadcast(&ctrlPkt);
+                // Envia 3 vezes: com sinal fraco um único broadcast se perde fácil.
+                // O nó destino ignora as cópias repetidas (mesmo msg_id).
+                for (int rep = 0; rep < 3; rep++) {
+                    AresRadio::getInstance().sendBroadcast(&ctrlPkt);
+                    delay(30);
+                }
                 Serial.printf("[CONTROL PLANE] 📡 Propagando ordem RF (SET_ROLE=%s) pela malha para o nó %s [CMD %s]\n",
                               roleName, targetId, cmdId);
             }
@@ -725,6 +731,23 @@ void AresGateway::processDownstreamAndControlResponse(JsonDocument& resDoc) {
     }
 }
 
+// Se o servidor respondeu 429 (muitas requisições), pausa todos os envios HTTP
+// pelo tempo do cabeçalho Retry-After ou, se não vier, GATEWAY_RATE_LIMIT_PAUSE_MS.
+bool AresGateway::handleRateLimit(int httpCode, HTTPClient &http, const char *what) {
+    if (httpCode != 429) return false;
+    unsigned long pauseMs = GATEWAY_RATE_LIMIT_PAUSE_MS;
+    String ra = http.header("Retry-After");
+    if (ra.length() > 0 && ra.toInt() > 0) {
+        pauseMs = (unsigned long)ra.toInt() * 1000UL;
+        if (pauseMs > 300000UL) pauseMs = 300000UL;
+    }
+    rateLimitUntil = millis() + pauseMs;
+    if (rateLimitUntil == 0) rateLimitUntil = 1;
+    Serial.printf("[ARES GATEWAY] ⏳ Servidor respondeu 429 (muitas requisições) no %s. Pausando envios por %lu s.\n",
+                  what, pauseMs / 1000);
+    return true;
+}
+
 bool AresGateway::sendHeartbeat() {
     if (WiFi.status() != WL_CONNECTED) return false;
 
@@ -743,6 +766,8 @@ bool AresGateway::sendHeartbeat() {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-Api-Key", m2mKey.c_str());
     http.setTimeout(8000);  // HTTPS precisa de mais tempo (handshake TLS)
+    const char *hdrKeys[] = {"Retry-After"};
+    http.collectHeaders(hdrKeys, 1);
 
     char hbSig[17] = {0};
     computeNodeHmacHex(ARES_NODE_ID, "HB", hbSig);
@@ -813,6 +838,7 @@ bool AresGateway::sendHeartbeat() {
         return true;
     } else {
         Serial.printf("[ARES GATEWAY] ⚠️ Falha no Heartbeat HTTP (%d) para %s\n", httpCode, hbUrl.c_str());
+        handleRateLimit(httpCode, http, "heartbeat");
         http.end();
         return false;
     }
@@ -835,6 +861,13 @@ void AresGateway::processIngressQueue() {
 
     unsigned long now = millis();
 
+    // Servidor pediu para esperar (HTTP 429): não envia nada até o fim da pausa
+    if (rateLimitUntil != 0) {
+        if ((long)(now - rateLimitUntil) < 0) return;
+        rateLimitUntil = 0;
+        Serial.println("[ARES GATEWAY] ▶️ Fim da pausa do 429. Voltando a enviar ao servidor.");
+    }
+
     // 3. Dispara Heartbeat periódico (a cada 10s ou imediatamente após conectar)
     if (lastHeartbeatTime == 0 || (now - lastHeartbeatTime >= GATEWAY_HEARTBEAT_MS)) {
         lastHeartbeatTime = now;
@@ -844,7 +877,7 @@ void AresGateway::processIngressQueue() {
     if (pendingCount <= 0) return;
 
     // Intervalo de segurança para retentativa de pacotes de dados
-    if (now - lastPostRetryTime < 2000) {
+    if (now - lastPostRetryTime < GATEWAY_INGRESS_RETRY_MS) {
         return;
     }
 
@@ -875,6 +908,8 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-Api-Key", m2mKey.c_str());
     http.setTimeout(8000);  // HTTPS precisa de mais tempo (handshake TLS)
+    const char *hdrKeys[] = {"Retry-After"};
+    http.collectHeaders(hdrKeys, 1);
 
     char pktSig[17] = {0};
     computeNodeHmacHex(packet->header.source_id, packet->header.msg_id, pktSig);
@@ -921,6 +956,7 @@ bool AresGateway::sendHttpPost(const AresMessagePacket *packet) {
         return true;
     } else {
         Serial.printf("[ARES GATEWAY] Erro no HTTP POST (%d) para %s\n", httpCode, backendUrl.c_str());
+        handleRateLimit(httpCode, http, "envio de SOS");
         http.end();
         return false;
     }

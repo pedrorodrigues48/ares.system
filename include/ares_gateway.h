@@ -65,6 +65,7 @@ private:
     unsigned long lastWifiRetryTime;
     unsigned long lastPostRetryTime;
     unsigned long lastHeartbeatTime;
+    unsigned long rateLimitUntil;   // 429: não envia nada ao servidor até este millis()
     bool apActive;
     bool isWifiConnected;
     bool begun;
@@ -76,6 +77,7 @@ private:
     String m2mKey;
 
     void loadConfig();
+    bool handleRateLimit(int httpCode, HTTPClient &http, const char *what);
     void saveConfig(const String& ssid, const String& pass, const String& backend, const String& m2m);
     void startSetupPortal();
     void setupWebRoutes();

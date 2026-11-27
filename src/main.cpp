@@ -32,6 +32,8 @@ unsigned long lastBeaconTime = 0;
 unsigned long lastAliveBlinkTime = 0;
 unsigned long packetLedTurnOffTime = 0;
 unsigned long gatewayPulsePressStart = 0;
+unsigned long lastCustodyResendTime = 0;
+int custodyResendIndex = 0;
 bool gatewayPulseTriggered = false;
 bool batteryDegradedMode = false;
 
@@ -160,6 +162,12 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
 
     // Deduplicação contra loops de inundação RF (antes de acionar o LED)
     if (AresRadio::getInstance().hasSeenMessage(packet->header.msg_id)) {
+        // Gateway: se o Router reenviou um SOS que já chegou, é porque o ACK se perdeu.
+        // Manda o ACK de novo (sem colocar o SOS na fila outra vez).
+        if (g_ares_role == ARES_ROLE_GATEWAY && packet->header.direction == ARES_DIR_UPSTREAM &&
+            (packet->header.msg_type == ARES_MSG_DATA || packet->header.msg_type == 0)) {
+            sendCustodyAck(packet->header.msg_id, packet->header.source_id);
+        }
         return;
     }
     AresRadio::getInstance().markMessageSeen(packet->header.msg_id);
@@ -450,6 +458,25 @@ void loop() {
         AresCaptivePortal::getInstance().handleClient();
     } else if (g_ares_role == ARES_ROLE_GATEWAY) {
         AresGateway::getInstance().processIngressQueue();
+    }
+
+    // 5b. Router: reenvia pela malha, um por vez, os SOS que ainda não tiveram
+    // confirmação (ACK) do Gateway. Antes o SOS era enviado uma única vez e,
+    // se o broadcast se perdesse, ficava parado na Flash para sempre.
+    if (g_ares_role == ARES_ROLE_ROUTER && now - lastCustodyResendTime >= CUSTODY_RESEND_MS) {
+        lastCustodyResendTime = now;
+        int total = AresStorage::getInstance().getStoredCount();
+        if (total > 0) {
+            if (custodyResendIndex >= total) custodyResendIndex = 0;
+            const AresMessagePacket *pending = AresStorage::getInstance().getPacketAt(custodyResendIndex);
+            if (pending) {
+                AresRadio::getInstance().sendBroadcast(pending);
+                triggerPacketActivityLed();
+                Serial.printf("[%s] 🔁 [DTN] Reenviando SOS %s (sem ACK do Gateway ainda) | %d na fila\n",
+                              ARES_NODE_ID, pending->header.msg_id, total);
+            }
+            custodyResendIndex++;
+        }
     }
 
     // 6. Emite telemetria assinada do Plano de Controle Interno RF a cada BEACON_INTERVAL_MS
