@@ -33,6 +33,54 @@ unsigned long lastAliveBlinkTime = 0;
 unsigned long packetLedTurnOffTime = 0;
 unsigned long gatewayPulsePressStart = 0;
 unsigned long lastCustodyResendTime = 0;
+AresNeighbor g_ares_neighbors[ARES_MAX_NEIGHBORS] = {};
+
+// Registra/atualiza um vizinho direto
+static void recordNeighbor(const char *id, int rssi) {
+    if (!id || !id[0] || strcmp(id, ARES_NODE_ID) == 0) return;
+    unsigned long now = millis();
+    int slot = -1, oldest = 0;
+    for (int i = 0; i < ARES_MAX_NEIGHBORS; i++) {
+        if (strcmp(g_ares_neighbors[i].id, id) == 0) { slot = i; break; }
+        if (slot == -1 && g_ares_neighbors[i].id[0] == '\0') slot = i;
+        if (g_ares_neighbors[i].lastSeen < g_ares_neighbors[oldest].lastSeen) oldest = i;
+    }
+    if (slot == -1) slot = oldest;
+    if (strcmp(g_ares_neighbors[slot].id, id) != 0) {
+        Serial.printf("[%s] 👋 [VIZINHO] Novo vizinho direto: %s (RSSI %d dBm)\n", ARES_NODE_ID, id, rssi);
+    }
+    strncpy(g_ares_neighbors[slot].id, id, sizeof(g_ares_neighbors[slot].id) - 1);
+    g_ares_neighbors[slot].rssi = rssi;
+    g_ares_neighbors[slot].lastSeen = now;
+}
+
+// Monta "NB:599644-88,A00370-70" (só os 6 últimos caracteres do ID, RSSI sem sinal)
+// cabendo em maxLen. Remove da lista quem não é ouvido há mais de 20 s.
+static void buildNeighborField(char *out, size_t maxLen) {
+    out[0] = '\0';
+    if (maxLen < 8) return;
+    unsigned long now = millis();
+    size_t used = snprintf(out, maxLen, "NB:");
+    bool first = true;
+    for (int i = 0; i < ARES_MAX_NEIGHBORS; i++) {
+        AresNeighbor &n = g_ares_neighbors[i];
+        if (!n.id[0]) continue;
+        if (now - n.lastSeen > ARES_NEIGHBOR_TIMEOUT_MS) {
+            Serial.printf("[%s] 💨 [VIZINHO] %s saiu do alcance\n", ARES_NODE_ID, n.id);
+            n.id[0] = '\0';
+            continue;
+        }
+        size_t idLen = strlen(n.id);
+        const char *shortId = idLen > 6 ? n.id + idLen - 6 : n.id;
+        char item[16];
+        int len = snprintf(item, sizeof(item), "%s%s-%d", first ? "" : ",", shortId, abs(n.rssi));
+        if (used + len >= maxLen) break;
+        strcat(out, item);
+        used += len;
+        first = false;
+    }
+    if (first) out[0] = '\0'; // nenhum vizinho
+}
 int custodyResendIndex = 0;
 bool gatewayPulseTriggered = false;
 bool batteryDegradedMode = false;
@@ -121,7 +169,9 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs) {
 // Envia confirmação de custódia DTN (ACK) para o emissor liberar a memória flash
 void sendCustodyAck(const char* targetMsgId, const char* targetNodeId) {
     AresMessagePacket ack = {};
-    snprintf(ack.header.msg_id, sizeof(ack.header.msg_id), "ACK-%s", targetMsgId);
+    // ID único por ACK (o Gateway pode reenviar o ACK); senão os nós do meio achavam que
+    // era repetido e não repassavam. O ID do SOS confirmado vai no payload.
+    snprintf(ack.header.msg_id, sizeof(ack.header.msg_id), "K%04lu-%s", (unsigned long)(millis() % 10000), targetMsgId);
     strncpy(ack.header.source_id, ARES_NODE_ID, sizeof(ack.header.source_id) - 1);
     strncpy(ack.header.destination_id, targetNodeId, sizeof(ack.header.destination_id) - 1);
     ack.header.priority = ARES_P0_EMERGENCY;
@@ -160,6 +210,11 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
         return;
     }
 
+    // Pacote que veio direto da origem (sem repasse): a origem é vizinha deste nó
+    if (packet->header.hop_count <= 1) {
+        recordNeighbor(packet->header.source_id, rssi);
+    }
+
     // Deduplicação contra loops de inundação RF (antes de acionar o LED)
     if (AresRadio::getInstance().hasSeenMessage(packet->header.msg_id)) {
         // Gateway: se o Router reenviou um SOS que já chegou, é porque o ACK se perdeu.
@@ -167,6 +222,16 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
         if (g_ares_role == ARES_ROLE_GATEWAY && packet->header.direction == ARES_DIR_UPSTREAM &&
             (packet->header.msg_type == ARES_MSG_DATA || packet->header.msg_type == 0)) {
             sendCustodyAck(packet->header.msg_id, packet->header.source_id);
+        }
+        // Router/Relay: o nó de origem reenviou o SOS (hop_count == 1, veio direto dele),
+        // então o repasse anterior pode ter se perdido. Repassa de novo. Só cópias diretas
+        // da origem, para dois nós não ficarem repassando um para o outro sem parar.
+        else if ((g_ares_role == ARES_ROLE_ROUTER || g_ares_role == ARES_ROLE_RELAY) &&
+                 packet->header.direction == ARES_DIR_UPSTREAM && packet->header.hop_count == 1 &&
+                 (packet->header.msg_type == ARES_MSG_DATA || packet->header.msg_type == 0)) {
+            Serial.printf("[%s] 🔁 [RELAY DADOS] %s reenviou o SOS %s, repassando de novo\n",
+                          ARES_NODE_ID, packet->header.source_id, packet->header.msg_id);
+            forwardPacketOnMesh(packet);
         }
         return;
     }
@@ -185,6 +250,15 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
 
     // 1. Confirmação de Custódia DTN
     if (packet->header.msg_type == ARES_MSG_CUSTODY_ACK) {
+        // ACK para outro nó: Router/Relay repassa para ele chegar em quem está mais longe
+        if (strcmp(packet->header.destination_id, ARES_NODE_ID) != 0) {
+            if (g_ares_role == ARES_ROLE_ROUTER || g_ares_role == ARES_ROLE_RELAY) {
+                Serial.printf("[%s] 🔄 [RELAY ACK] Repassando confirmação do SOS %s para %s\n",
+                              ARES_NODE_ID, packet->payload.text_message, packet->header.destination_id);
+                forwardPacketOnMesh(packet);
+            }
+            return;
+        }
         Serial.printf("[%s] 📥 [DTN CUSTODY ACK] Confirmação recebida de %s para pacote %s (RSSI: %d dBm)\n",
                       ARES_NODE_ID, packet->header.source_id, packet->payload.text_message, rssi);
         AresStorage::getInstance().confirmCustody(packet->payload.text_message);
@@ -330,6 +404,14 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
     }
 
     if (g_ares_role == ARES_ROLE_ROUTER) {
+        // SOS de outro Router/nó subindo para a base: este Router também repassa
+        // (antes só o RELAY repassava, então Router → Router → Gateway não funcionava)
+        if (packet->header.direction == ARES_DIR_UPSTREAM) {
+            Serial.printf("[%s] 🔄 [RELAY DADOS] Router repassando SOS %s de %s rumo ao Gateway (salto %d ➔ %d)\n",
+                          ARES_NODE_ID, packet->header.msg_id, packet->header.source_id,
+                          packet->header.hop_count, packet->header.hop_count + 1);
+            forwardPacketOnMesh(packet);
+        }
         if (packet->header.direction == ARES_DIR_DOWNSTREAM) {
             if (strcmp(packet->header.destination_id, ARES_NODE_ID) == 0 || strcmp(packet->header.destination_id, "BROADCAST") == 0) {
                 Serial.printf("[%s] NOTIFICAÇÃO DA BASE RECEBIDA: %s\n", ARES_NODE_ID, packet->payload.text_message);
@@ -511,14 +593,26 @@ void loop() {
         strncpy(telePkt.location.lon, ARES_NODE_LON, sizeof(telePkt.location.lon) - 1);
         strncpy(telePkt.location.altura, ARES_NODE_ALTURA, sizeof(telePkt.location.altura) - 1);
 
-        snprintf(telePkt.payload.text_message, sizeof(telePkt.payload.text_message),
+        int baseLen = snprintf(telePkt.payload.text_message, sizeof(telePkt.payload.text_message),
                  "ROLE:%s|SIG:%s|MAC:%s",
                  aresRoleToString(g_ares_role), teleSig, g_ares_mac_str);
+        // Lista de vizinhos diretos no espaço que sobrar (o site usa para desenhar a rede)
+        if (baseLen > 0 && (size_t)baseLen + 6 < sizeof(telePkt.payload.text_message)) {
+            char nbField[64];
+            size_t room = sizeof(telePkt.payload.text_message) - baseLen - 1; // -1 do '|'
+            buildNeighborField(nbField, room < sizeof(nbField) ? room : sizeof(nbField));
+            if (nbField[0]) {
+                strcat(telePkt.payload.text_message, "|");
+                strcat(telePkt.payload.text_message, nbField);
+            }
+        }
 
         AresRadio::getInstance().markMessageSeen(telePkt.header.msg_id);
         AresRadio::getInstance().sendBroadcast(&telePkt);
         triggerPacketActivityLed();
-        Serial.printf("[%s] 📡 [TX BEACON RF] Emitindo presença na malha | Função: %s | Flash Livre: %u KB | HMAC: %s\n",
-                      ARES_NODE_ID, aresRoleToString(g_ares_role), telePkt.telemetry.storage_avail_kb, teleSig);
+        const char *nbInfo = strstr(telePkt.payload.text_message, "NB:");
+        Serial.printf("[%s] 📡 [TX BEACON RF] Emitindo presença na malha | Função: %s | Flash Livre: %u KB | Vizinhos: %s\n",
+                      ARES_NODE_ID, aresRoleToString(g_ares_role), telePkt.telemetry.storage_avail_kb,
+                      nbInfo ? nbInfo + 3 : "nenhum");
     }
 }

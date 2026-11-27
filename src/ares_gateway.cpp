@@ -618,6 +618,36 @@ void AresGateway::recordMeshTelemetry(const AresMessagePacket *packet, int rssi)
         remoteNodes[slot].mac_address[k] = '\0';
     }
 
+    // Extrai NB:599644-88,A00370-70 (vizinhos diretos do nó, IDs com os 6 últimos caracteres)
+    remoteNodes[slot].nb_count = 0;
+    const char* nbPos = strstr(txt, "NB:");
+    if (nbPos) {
+        nbPos += 3;
+        while (*nbPos && *nbPos != '|' && remoteNodes[slot].nb_count < 6) {
+            char shortId[8] = {0};
+            int k = 0;
+            while (nbPos[k] && nbPos[k] != '-' && nbPos[k] != ',' && nbPos[k] != '|' && k < 7) {
+                shortId[k] = nbPos[k];
+                k++;
+            }
+            nbPos += k;
+            int nbRssi = -65;
+            if (*nbPos == '-') {
+                nbPos++;
+                nbRssi = -atoi(nbPos);
+                while (*nbPos >= '0' && *nbPos <= '9') nbPos++;
+            }
+            if (shortId[0]) {
+                uint8_t c = remoteNodes[slot].nb_count;
+                snprintf(remoteNodes[slot].nb_ids[c], sizeof(remoteNodes[slot].nb_ids[c]), "ESP32_%s", shortId);
+                remoteNodes[slot].nb_rssi[c] = nbRssi;
+                remoteNodes[slot].nb_count++;
+            }
+            if (*nbPos == ',') nbPos++;
+            else if (*nbPos != '\0' && *nbPos != '|') nbPos++; // pula caractere inesperado
+        }
+    }
+
     remoteNodes[slot].dirty = true;
 }
 
@@ -809,9 +839,34 @@ bool AresGateway::sendHeartbeat() {
             mn["lat"] = remoteNodes[i].lat;
             mn["lon"] = remoteNodes[i].lon;
             mn["signature"] = remoteNodes[i].signature;
+            // O backend cria um enlace entre cada par seguido de IDs da hops_trail.
+            // Para desenhar a rede real (quem ouve quem), a trilha "passeia" pelos
+            // vizinhos diretos: [nó, viz1, nó, viz2, ...] => enlaces nó-viz1, nó-viz2.
             JsonArray trail = mn["hops_trail"].to<JsonArray>();
-            trail.add(remoteNodes[i].node_id);
-            trail.add(ARES_NODE_ID);
+            bool linkedToGw = false;
+            for (uint8_t v = 0; v < remoteNodes[i].nb_count; v++) {
+                trail.add(remoteNodes[i].node_id);
+                trail.add(remoteNodes[i].nb_ids[v]);
+                if (strcmp(remoteNodes[i].nb_ids[v], ARES_NODE_ID) == 0) linkedToGw = true;
+            }
+            // O Gateway também ouve este nó direto? Então liga os dois.
+            if (!linkedToGw) {
+                unsigned long nowMs = millis();
+                for (int g = 0; g < ARES_MAX_NEIGHBORS; g++) {
+                    if (strcmp(g_ares_neighbors[g].id, remoteNodes[i].node_id) == 0 &&
+                        nowMs - g_ares_neighbors[g].lastSeen <= ARES_NEIGHBOR_TIMEOUT_MS) {
+                        linkedToGw = true;
+                        trail.add(remoteNodes[i].node_id);
+                        trail.add(ARES_NODE_ID);
+                        break;
+                    }
+                }
+            }
+            // Versão antiga do firmware (sem NB) e sem vizinhança conhecida: liga ao Gateway como antes
+            if (trail.size() == 0) {
+                trail.add(remoteNodes[i].node_id);
+                trail.add(ARES_NODE_ID);
+            }
             remoteNodes[i].dirty = false;
         }
     }
