@@ -104,7 +104,7 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs);
 #define GATEWAY_HEARTBEAT_MS      20000 // Heartbeat HTTP a cada 20s (10s fazia o servidor responder 429)
 #define GATEWAY_RATE_LIMIT_PAUSE_MS 60000 // Pausa em todos os envios HTTP quando o servidor responde 429 (sem Retry-After)
 #define GATEWAY_INGRESS_RETRY_MS  5000  // Espera entre tentativas de reenviar um SOS que falhou
-#define CUSTODY_RESEND_MS         15000 // Router reenvia pela malha os SOS ainda sem confirmação a cada 15s
+#define CUSTODY_RESEND_MS         4000  // Router reenvia pela malha os SOS ainda sem confirmação a cada 4s
 
 // ==============================================================================
 // PINAGEM DE LEDS E PULSO FÍSICO PARA GATEWAY INICIAL
